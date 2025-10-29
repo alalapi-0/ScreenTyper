@@ -1,29 +1,32 @@
 """ScreenTyper 主程序入口。
 
 该模块负责协调定时任务、读取输入内容并驱动屏幕输入操作。
-目前仅定义程序结构，后续将逐步完善具体逻辑。
 """
 
+import argparse
 import importlib.util
 import platform
 import sys
+import time
+from datetime import datetime
+from typing import Optional
+
+import schedule
+
+from config import DEFAULT_INTERVAL_MINUTES, INPUT_FILE_PATH
 
 
 def check_environment() -> None:
-    """检查运行环境是否满足程序要求。
-
-    该函数依次检查操作系统、Python 版本以及关键依赖库是否满足运行条件。
-    任意检测未通过时，将输出错误提示并终止程序运行。
-    """
+    """检查运行环境是否满足程序要求。"""
 
     print("=== ScreenTyper 环境检测 ===")
 
     # 检查操作系统是否为 Windows
     current_system = platform.system()
     if current_system != "Windows":
-        print("❌ 当前系统非 Windows，本程序仅支持 Windows。")
-        sys.exit(1)
-    print(f"✅ 当前系统：{current_system}")
+        print("⚠️ 当前系统非 Windows，本程序主要在 Windows 上测试，继续运行可能存在兼容性问题。")
+    else:
+        print(f"✅ 当前系统：{current_system}")
 
     # 检查 Python 版本是否符合最低要求
     python_version = sys.version.split(" ")[0]
@@ -33,7 +36,7 @@ def check_environment() -> None:
     print(f"✅ Python 版本：{python_version}")
 
     # 检查必需依赖库是否已安装
-    required_packages = ["pyautogui", "keyboard", "schedule"]
+    required_packages = ["schedule"]
     missing_packages = []
 
     for package in required_packages:
@@ -51,55 +54,105 @@ def check_environment() -> None:
     print("🎉 环境检测通过，可以继续运行。")
 
 
-def load_input_content(file_path: str) -> str:
-    """加载外部输入内容文件。
+def read_input_from_file(filepath: str) -> str:
+    """读取指定文件中的文本内容。"""
 
-    :param file_path: 输入内容文件的路径。
-    :return: 文件中的文本内容。
-    """
-    # TODO: 读取文本文件并返回其中的内容。
-    raise NotImplementedError("后续实现文件读取逻辑")
+    try:
+        with open(filepath, "r", encoding="utf-8") as file:
+            content = file.read()
+    except FileNotFoundError:
+        print(f"⚠️ 未找到输入文件：{filepath}")
+        return ""
+    except OSError as exc:
+        print(f"⚠️ 读取输入文件时发生错误：{exc}")
+        return ""
 
+    # 去除首尾空白字符，防止出现额外的空行
+    cleaned_content = content.strip()
+    if not cleaned_content:
+        print("⚠️ 输入文件内容为空，请检查文件。")
+        return ""
 
-def focus_target_area() -> None:
-    """聚焦目标输入区域。
-
-    该函数负责将光标移动到目标输入框，并确保光标处于可输入状态。
-    """
-    # TODO: 根据屏幕坐标移动鼠标，并尝试点击输入框以获取焦点。
-    raise NotImplementedError("后续实现聚焦逻辑")
-
-
-def type_content(content: str) -> None:
-    """在屏幕上输入给定内容。
-
-    :param content: 待输入的文本内容。
-    """
-    # TODO: 通过 pyautogui 或 keyboard 模拟键盘输入指定文本。
-    raise NotImplementedError("后续实现自动输入逻辑")
+    return cleaned_content
 
 
-def schedule_typing_task() -> None:
-    """设置定时任务，实现周期性自动输入。
+def trigger_typing_action() -> None:
+    """触发一次模拟输入操作。"""
 
-    该函数将读取配置或默认参数，周期性执行聚焦与输入流程。
-    """
-    # TODO: 使用 schedule 等库注册定时任务，并在循环中运行。
-    raise NotImplementedError("后续实现定时任务调度")
+    content = read_input_from_file(INPUT_FILE_PATH)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print("📄 当前输入内容：")
+    if content:
+        print(f"[模拟输入] {content}")
+    else:
+        print("[模拟输入] （输入内容为空，未执行实际输入）")
+
+    print(f"🕒 已于 {timestamp} 触发模拟输入")
+
+
+def schedule_typing_loop(interval_minutes: float) -> None:
+    """根据给定的间隔循环调度输入任务。"""
+
+    print("=== ScreenTyper 定时任务启动 ===")
+
+    # 清理旧任务后注册新的定时任务
+    schedule.clear()
+    schedule.every(interval_minutes).minutes.do(trigger_typing_action)
+
+    # 启动时立即执行一次，确保用户能够快速验证功能
+    trigger_typing_action()
+
+    try:
+        announced_next_run: Optional[datetime] = None
+        while True:
+            schedule.run_pending()
+
+            next_run = schedule.next_run()
+            if next_run and next_run != announced_next_run:
+                remaining_seconds = max((next_run - datetime.now()).total_seconds(), 0)
+                remaining_minutes = remaining_seconds / 60
+                print(
+                    f"⏳ 等待下一次触发（约 {remaining_minutes:.1f} 分钟后，预计 {next_run.strftime('%Y-%m-%d %H:%M:%S')}）..."
+                )
+                announced_next_run = next_run
+
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n👋 检测到退出指令，正在结束定时任务。再见！")
+
+
+def parse_arguments() -> argparse.Namespace:
+    """解析命令行参数，允许用户自定义任务间隔。"""
+
+    parser = argparse.ArgumentParser(description="ScreenTyper 定时输入任务控制程序")
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_INTERVAL_MINUTES,
+        help="定时触发间隔，单位为分钟，默认为配置文件中的数值。",
+    )
+    return parser.parse_args()
+
+
+def validate_interval(interval_minutes: float) -> float:
+    """验证并返回合法的间隔值。"""
+
+    if interval_minutes <= 0:
+        print("⚠️ 间隔必须为正数，将回退至默认值。")
+        return DEFAULT_INTERVAL_MINUTES
+    return interval_minutes
 
 
 def main() -> None:
-    """程序主入口，负责协调各模块。
+    """程序主入口，负责初始化并启动定时任务循环。"""
 
-    在此函数中进行初始化、调度任务并保持程序运行。
-    """
-    # 首先进行环境检测，确保运行条件满足要求。
+    args = parse_arguments()
+    interval_minutes = validate_interval(args.interval)
+
     check_environment()
-
-    # TODO: 初始化配置、定时器，并启动主循环。
-    raise NotImplementedError("后续实现主函数逻辑")
+    schedule_typing_loop(interval_minutes)
 
 
 if __name__ == "__main__":
-    # TODO: 在运行主程序前处理命令行参数或环境准备。
     main()
